@@ -22,14 +22,14 @@ class DistrHashMap:
         self.checkingCycle.join()
 
     def get(self, key):
-        return self.hashMap.get(hash(key))
+        return self.hashMap.get(key)
 
-    def set(self, value):
+    def set(self, key, value):
         #self.__localSet(value)
-        self.connections.setRPC(value)
+        self.connections.setRPC(key, value)
 
-    def __localSet(self, value):
-        self.hashMap[hash(value)] = value
+    def __localSet(self, key, value):
+        self.hashMap[key] = value
 
     def __checkMessages(self):
         iterations = 0

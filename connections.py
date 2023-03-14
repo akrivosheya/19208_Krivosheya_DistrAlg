@@ -41,14 +41,14 @@ class Connections:#получение сообщений и accept лидера 
         self.logs = list()
         self.__setConnection()
 
-    def setRPC(self, value):
-        serializedValue = pickle.dumps(value)
+    def setRPC(self, key, value):
+        serializedValue = pickle.dumps((key, value))
         length = serializedValue.__len__().to_bytes(MESSAGE_LENGTH_SIZE, byteorder='little', signed=False)
         messageType = SET.to_bytes(MESSAGE_TYPE_SIZE, byteorder='little', signed=False)
         message = (b'').join([messageType, length, serializedValue])
         self.__sendMessage((b'').join([messageType, length, serializedValue]))
         if self.isLeader:
-            self.onRemoteSet(value)
+            self.onRemoteSet(key, value)
             self.logs.append(message)
 
     def checkMessages(self):
@@ -132,9 +132,9 @@ class Connections:#получение сообщений и accept лидера 
                 serilizedLength = pipe.recv(MESSAGE_LENGTH_SIZE)
                 length = int.from_bytes(serilizedLength, byteorder='little', signed=False)
                 serializedData = pipe.recv(length)
-                value = pickle.loads(serializedData)
+                key, value = pickle.loads(serializedData)
                 print("set")
-                self.onRemoteSet(value)
+                self.onRemoteSet(key, value)
                 self.logs.append((b'').join([serializedMessageType, serilizedLength, serializedData]))
                 self.aliveInIterationHosts[pipe.getpeername()] = True
                 if(self.isLeader):
@@ -238,8 +238,10 @@ class Connections:#получение сообщений и accept лидера 
     def __getLeader(self, hosts):#проверки + одинаковые порты
         leader = hosts[0]
         for host in hosts[1:len(hosts)]:
+            print(leader, " ", self.aliveHosts[host], " ", host)
             if (not self.aliveHosts[leader]) or (self.aliveHosts[host] and host[1] < leader[1]):
                 leader = host
+        print(leader)
         return leader
 
         
