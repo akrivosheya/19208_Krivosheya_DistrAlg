@@ -20,6 +20,7 @@ class DistrHashMap:
         self.isDestroying = True
         self.connections.isDestroying = True
         self.checkingCycle.join()
+        self.connections.join()
 
     def get(self, key):
         return self.hashMap.get(key)
@@ -38,7 +39,7 @@ class DistrHashMap:
             if(self.isDestroying):
                 break
             self.connections.sendAliveMessage()
-            self.connections.checkMessages()
+            #self.connections.checkMessages()
             iterations += 1
             if(iterations == TIMEOUT):
                 self.connections.checkAliveHosts()
