@@ -2,85 +2,162 @@ import socket
 import select
 import pickle
 import threading
+import time
 
 PORT_SEPARATOR = ':'
 MESSAGE_TYPE_SIZE = 1
 MESSAGE_LENGTH_SIZE = 1
 TIMEOUT = 5
 ACCEPTING_TIMEOUT = 0.1
+CHECKING_WAIT_TIME = 0.3
 MAX_ATTEMPTS = 5
 
-ALIVE = 1
-SET = 2
-GET_LOG = 4
-SEND_LOG = 8
+ALIVE = 0
+SET = 1
+GET_LOG = 2
+SEND_LOG = 3
 
 #private
 #len
 class Connections:#получение сообщений и accept лидера в отдельном потоке
-    def __init__(self, ownHost, otherHosts, onRemoteSet, onDestroy):#проверки
-        self.onRemoteSet = onRemoteSet
-        self.onDestroy = onDestroy
-        self.isDestroying = False
-        separatedHost = ownHost.split(PORT_SEPARATOR)
-        self.ownHost = (separatedHost[0], int(separatedHost[1]))
-        self.aliveInIterationHosts = dict()
-        self.aliveInIterationHosts[self.ownHost] = True
-        for otherHost in otherHosts:
-            otherHostSeparated = otherHost.split(PORT_SEPARATOR)
-            self.aliveInIterationHosts[(otherHostSeparated[0], int(otherHostSeparated[1]))] = False
-        self.aliveHosts = dict()
-        self.aliveHosts[self.ownHost] = True
-        for otherHost in otherHosts:
-            otherHostSeparated = otherHost.split(PORT_SEPARATOR)
-            self.aliveHosts[(otherHostSeparated[0], int(otherHostSeparated[1]))] = True
-        self.possibleLeaders = set(self.aliveInIterationHosts.keys())
-        self.possibleLeaders.add(self.ownHost)
-        self.otherHostsCount = len(otherHosts)
-        self.connections = dict()
-        self.logs = list()
-        self.__setConnection()
-        self.checkingLock = threading.Lock()
-        self.checkingMessages = threading.Thread(target=self.checkMessages)
-        self.checkingMessages.start()
+    def __init__(self, __ownHost, otherHosts, onRemoteSet, onDestroy):#проверки
+        self.__onRemoteSet = onRemoteSet
+        self.__onDestroy = onDestroy
+        self.__isDestroying = False
+        self.__commands = list()
+        self.__commands.append(self.__aliveCommand)
+        self.__commands.append(self.__setCommand)
+        self.__commands.append(self.__getLogCommand)
 
-    def join(self):
-        self.checkingMessages.join()
+        separatedHost = __ownHost.split(PORT_SEPARATOR)
+        self.__ownHost = (separatedHost[0], int(separatedHost[1]))
+
+        self.__aliveInIterationHosts = dict()
+        self.__aliveInIterationHosts[self.__ownHost] = True
+        for otherHost in otherHosts:
+            separatedHost = otherHost.split(PORT_SEPARATOR)
+            self.__aliveInIterationHosts[(separatedHost[0], int(separatedHost[1]))] = False
+        self.__aliveHosts = dict()
+        self.__aliveHosts[self.__ownHost] = True
+        for otherHost in otherHosts:
+            separatedHost = otherHost.split(PORT_SEPARATOR)
+            self.__aliveHosts[(separatedHost[0], int(separatedHost[1]))] = True
+
+        self.__allHosts = set(self.__aliveInIterationHosts.keys())
+        self.__allHosts.add(self.__ownHost)
+        self.__otherHostsCount = len(otherHosts)
+
+        self.__connections = dict()
+        self.__logs = list()
+        self.__setConnection()
+
+        self.__checkingLock = threading.Lock()
+        self.__checkingMessagesThread = threading.Thread(target=self.__checkMessages)
+        self.__checkingMessagesThread.start()
+        self.__checkingHostsThread = threading.Thread(target=self.__checkHosts)
+        self.__checkingHostsThread.start()
+
+    def stop(self):
+        self.__isDestroying = True
+        self.__checkingMessagesThread.join()
+        self.__checkingHostsThread.join()
 
     def setRPC(self, key, value):
-        serializedValue = pickle.dumps((key, value))
-        length = serializedValue.__len__().to_bytes(MESSAGE_LENGTH_SIZE, byteorder='little', signed=False)
-        messageType = SET.to_bytes(MESSAGE_TYPE_SIZE, byteorder='little', signed=False)
-        message = (b'').join([messageType, length, serializedValue])
-        self.__sendMessage((b'').join([messageType, length, serializedValue]))
-        if self.isLeader:
-            self.onRemoteSet(key, value)
-            self.logs.append(message)
+        message = self.__sendMessage(SET, (key, value))
+        if self.__isLeader:
+            self.__onRemoteSet(key, value)
+            self.__logs.append(message)
 
-    def checkMessages(self):
+    def __sendAliveMessage(self, host):
+        self.__sendMessage(ALIVE, host)
+
+    def __getLogMessage(self):
+        self.__sendMessage(GET_LOG, len(self.__logs))
+
+    def __sendLogMessage(self, log, pipe):
+        """
+        serializedValue = log
+        length = serializedValue.__len__().to_bytes(MESSAGE_LENGTH_SIZE, byteorder='little', signed=False)
+        messageType = SEND_LOG.to_bytes(MESSAGE_TYPE_SIZE, byteorder='little', signed=False)
+        pipe.sendall((b'').join([messageType, length, serializedValue]))
+        """
+        pipe.sendall(log)
+
+    def __sendMessage(self, messageType, value):
+        serializedValue = pickle.dumps(value)
+        length = serializedValue.__len__().to_bytes(MESSAGE_LENGTH_SIZE, byteorder='little', signed=False)
+        serializedMessageType = messageType.to_bytes(MESSAGE_TYPE_SIZE, byteorder='little', signed=False)
+        message = (b'').join([serializedMessageType, length, serializedValue])
+        self.__sendReadyMessage(message)
+        return message
+
+    def __sendReadyMessage(self, mes):
+        if self.__isLeader:
+            for address, connection in self.__connections.items():
+                try:
+                    connection.sendall(mes)
+                except:
+                    self.__aliveInIterationHosts[address] = False
+        else:
+            try:
+                self.__socket.sendall(mes)#exceptions!!!
+            except:
+                self.__aliveInIterationHosts[self.__socket.getpeername()] = False
+
+    def __checkHosts(self):
+        iterations = 0
         while True:
-            if self.isDestroying:
-                addresses = list(self.connections.keys())
+            time.sleep(CHECKING_WAIT_TIME)
+            if(self.__isDestroying):
+                break
+            self.__sendAliveMessage(self.__ownHost)
+            iterations += 1
+            if(iterations == TIMEOUT):
+                self.__checkAliveHosts()
+                iterations = 0
+
+    def __checkAliveHosts(self):
+        self.__checkingLock.acquire()
+        needNewLeader = False
+        for address, isAlive in self.__aliveInIterationHosts.items():
+            if isAlive:
+                self.__aliveHosts[address] = True
+                if address != self.__ownHost:
+                    self.__aliveInIterationHosts[address] = False
+            else:
+                self.__aliveHosts[address] = False
+                if self.__connections.get(address) != None:
+                    self.__connections.pop(address).close()
+                if self.__ownHost != self.__leader and address == self.__leader:
+                    needNewLeader = True
+        if needNewLeader:
+            self.__setConnection()
+        self.__checkingLock.release()
+
+    def __checkMessages(self):
+        while True:
+            if self.__isDestroying:
+                addresses = list(self.__connections.keys())
                 for address in addresses:
-                    self.connections.pop(address).close()
-                self.socket.close()
+                    self.__connections.pop(address).close()
+                self.__socket.close()
                 return
             checkingPipes = list()
-            if self.isLeader:
-                self.socket.settimeout(ACCEPTING_TIMEOUT)
+            if self.__isLeader:
+                self.__socket.settimeout(ACCEPTING_TIMEOUT)
                 try:
-                    connection, address = self.socket.accept()
+                    connection, address = self.__socket.accept()
                     print('accepted ', address)
-                    self.checkingLock.acquire()
-                    self.connections[address] = connection
+                    self.__checkingLock.acquire()
+                    self.__connections[address] = connection
                 except TimeoutError:
-                    self.checkingLock.acquire()
+                    self.__checkingLock.acquire()
                     pass
-                for connection in self.connections.values():
+                for connection in self.__connections.values():
                     checkingPipes.append(connection)
             else:
-                self.checkingLock.acquire()
-                checkingPipes.append(self.socket)
+                self.__checkingLock.acquire()
+                checkingPipes.append(self.__socket)
             for pipe in checkingPipes:
                 descriptor = pipe.fileno()
                 rlist, wlist, xlist = select.select([descriptor], [descriptor], [descriptor], 1)
@@ -101,183 +178,94 @@ class Connections:#получение сообщений и accept лидера 
                     """
                 if canRead:
                     self.__recieveMessage(pipe)
-            self.checkingLock.release()
-            
+            self.__checkingLock.release()
 
-    def sendAliveMessage(self):
-        self.__sendAliveMessage(self.ownHost)
-
-    def __sendAliveMessage(self, host):
-        serializedValue = pickle.dumps(host)
-        length = serializedValue.__len__().to_bytes(MESSAGE_LENGTH_SIZE, byteorder='little', signed=False)
-        messageType = ALIVE.to_bytes(MESSAGE_TYPE_SIZE, byteorder='little', signed=False)
-        self.__sendMessage((b'').join([messageType, length, serializedValue]))
-
-    def __getLogMessage(self):
-        
-        serializedValue = pickle.dumps(len(self.logs))
-        
-        length = serializedValue.__len__().to_bytes(MESSAGE_LENGTH_SIZE, byteorder='little', signed=False)
-        messageType = GET_LOG.to_bytes(MESSAGE_TYPE_SIZE, byteorder='little', signed=False)
-        self.__sendMessage((b'').join([messageType, length, serializedValue]))
-
-    def __sendLogMessage(self, log, pipe):
-        """
-        serializedValue = log
-        length = serializedValue.__len__().to_bytes(MESSAGE_LENGTH_SIZE, byteorder='little', signed=False)
-        messageType = SEND_LOG.to_bytes(MESSAGE_TYPE_SIZE, byteorder='little', signed=False)
-        pipe.sendall((b'').join([messageType, length, serializedValue]))
-        """
-        pipe.sendall(log)
-
-    def __recieveMessage(self, pipe):#нужно в отдельный поток
+    def __recieveMessage(self, pipe):
         try:
             pipe.setblocking(False)
             serializedMessageType = pipe.recv(MESSAGE_TYPE_SIZE)
-            #while serializedMessageType.__len__() > 0:
             if serializedMessageType.__len__() > 0:
                 messageType = int.from_bytes(serializedMessageType, byteorder='little', signed=False)
-                if(messageType & ALIVE):
-                    serilizedLength = pipe.recv(MESSAGE_LENGTH_SIZE)
-                    length = int.from_bytes(serilizedLength, byteorder='little', signed=False)
-                    serializedData = pipe.recv(length)
-                    host = pickle.loads(serializedData)
-                    
-                    self.aliveInIterationHosts[host] = True
-                    
-                    if(self.isLeader):
-                        self.__sendAliveMessage(host)
-                elif(messageType & SET):
-                    serilizedLength = pipe.recv(MESSAGE_LENGTH_SIZE)
-                    length = int.from_bytes(serilizedLength, byteorder='little', signed=False)
-                    serializedData = pipe.recv(length)
-                    key, value = pickle.loads(serializedData)
-                    print("set")
-                    self.onRemoteSet(key, value)
-                    
-                    self.logs.append((b'').join([serializedMessageType, serilizedLength, serializedData]))
-                    self.aliveInIterationHosts[pipe.getpeername()] = True
-                    
-                    if(self.isLeader):
-                        self.__sendMessage((b'').join([serializedMessageType, serilizedLength, serializedData]))
-                elif(messageType & GET_LOG):
-                    serilizedLength = pipe.recv(MESSAGE_LENGTH_SIZE)
-                    length = int.from_bytes(serilizedLength, byteorder='little', signed=False)
-                    serializedData = pipe.recv(length)
-                    lastLog = pickle.loads(serializedData)
-                    print("get")
-                    
-                    for i in range(lastLog, len(self.logs)):
-                        self.__sendLogMessage(self.logs[i], pipe)
-                    
-                else:
-                    print('strange data')
-                    self.onDestroy()#исправить
-        except :
-            print('Lost connection to host')
+                serializedLength = pipe.recv(MESSAGE_LENGTH_SIZE)
+                length = int.from_bytes(serializedLength, byteorder='little', signed=False)
+                serializedData = pipe.recv(length)
+                self.__commands[messageType](serializedMessageType, serializedLength, serializedData, pipe)
+        except Exception as ex:
+            print('Lost connection to host: ', ex)
             try:
-                self.aliveInIterationHosts[pipe.getpeername()] = False
+                self.__aliveInIterationHosts[pipe.getpeername()] = False
             except:
-                print("can't get infoo about host")
+                print("can't get info about host")
             return
-            """
-            elif(messageType & SEND_LOG):
-                serilizedLength = pipe.recv(MESSAGE_LENGTH_SIZE)
-                length = int.from_bytes(serilizedLength, byteorder='little', signed=False)
-                lastLog = pipe.recv(length)
-                lastLog = pickle.loads(serializedData)
-                print("get")
-            """
-            """
-            try:
-                serializedMessageType = pipe.recv(MESSAGE_TYPE_SIZE)
-            except:
-                print('Lost connection to ', pipe.getpeername())
-                self.aliveInIterationHosts[pipe.getpeername()] = False
-                return
-            """
+    
+    def __aliveCommand(self, serializedMessageType, serializedLength, serializedData, pipe):
+        host = pickle.loads(serializedData)
+        self.__aliveInIterationHosts[host] = True
+        if(self.__isLeader):
+            self.__sendAliveMessage(host)
 
-    def __sendMessage(self, mes):
-        if self.isLeader:
-            
-            for address, connection in self.connections.items():
-                try:
-                    connection.sendall(mes)
-                except:
-                    self.aliveInIterationHosts[address] = False
-            
-        else:
-            try:
-                self.socket.sendall(mes)#exceptions!!!
-            except:
-                
-                self.aliveInIterationHosts[self.socket.getpeername()] = False
-                
+    def __setCommand(self, serializedMessageType, serializedLength, serializedData, pipe):
+        key, value = pickle.loads(serializedData)
+        print("set")
+        self.__onRemoteSet(key, value)
+        self.__logs.append((b'').join([serializedMessageType, serializedLength, serializedData]))
+        self.__aliveInIterationHosts[pipe.getpeername()] = True
+        if(self.__isLeader):
+            self.__sendReadyMessage((b'').join([serializedMessageType, serializedLength, serializedData]))
 
-    def checkAliveHosts(self):
-        self.checkingLock.acquire()
-        needNewLeader = False
-        for address, isAlive in self.aliveInIterationHosts.items():
-            if isAlive:
-                print(address, ' is alive')
-                self.aliveHosts[address] = True
-                if address != self.ownHost:
-                    self.aliveInIterationHosts[address] = False
-            else:
-                self.aliveHosts[address] = False
-                if self.connections.get(address) != None:
-                    self.connections.pop(address).close()
-                if self.ownHost != self.leader and address == self.leader:
-                    needNewLeader = True
-        if needNewLeader:
-            self.__setConnection()
-        self.checkingLock.release()
-        
-        
+    def __getLogCommand(self, messageType, serializedLength, serializedData, pipe):
+        lastLog = pickle.loads(serializedData)
+        print("get")
+        for i in range(lastLog, len(self.__logs)):
+            self.__sendLogMessage(self.__logs[i], pipe)
 
     def __setConnection(self):#возможно нужно усложнить получение информации о лидерах и добавление старого лидера
-        addresses = list(self.connections.keys())
+        addresses = list(self.__connections.keys())
         for address in addresses:
-            self.connections.pop(address).close()
+            self.__connections.pop(address).close()
         try:
-            self.socket.close()
+            self.__socket.close()
         except:
             pass
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)#exceptions!!!
-        self.socket.bind(self.ownHost)
-        self.socket.settimeout(TIMEOUT)
-        self.leader = self.__getLeader(list(self.possibleLeaders))
-        if (self.ownHost == self.leader):
-            self.isLeader = True
-            self.socket.listen(1)
-            minNodesCount = self.otherHostsCount / 2
-            while(self.connections.__len__() < minNodesCount):
-                connection, address = self.socket.accept()
-                print('accepted ', address)
-                self.connections[address] = connection
+        #до этого нужно убрать
+        self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)#exceptions!!!
+        self.__socket.bind(self.__ownHost)
+        self.__socket.settimeout(TIMEOUT)
+        self.__leader = self.__getLeader(list(self.__allHosts))
+        if (self.__ownHost == self.__leader):
+            self.__isLeader = True
+            self.__socket.listen(1)
+            minNodesCount = self.__otherHostsCount / 2
+            while(self.__connections.__len__() < minNodesCount):
+                try:
+                    connection, address = self.__socket.accept()
+                    print('accepted ', address)
+                    self.__connections[address] = connection
+                except:
+                    print('bad accept')
+                    self.__onDestroy()
         else:
-            self.isLeader = False
+            self.__isLeader = False
             connected = False
             for i in range(MAX_ATTEMPTS):
-                print('attempt ', i, " to connect to ", self.leader)
+                print('attempt ', i, " to connect to ", self.__leader)
                 try:
-                    self.socket.connect(self.leader)
+                    self.__socket.connect(self.__leader)
                     connected = True
                     break
-                except TimeoutError:
-                    print("failed attempt ", i, " to connect to ", self.leader)
+                except:
+                    print("failed attempt ", i, " to connect to ", self.__leader)
             if connected:
-                print('connected to ', self.leader)
+                print('connected to ', self.__leader)
                 self.__getLogMessage()
             else:
-                raise TimeoutError("Can't connect to leader")
-
+                print("Can't connect to leader")
+                self.__onDestroy()
 
     def __getLeader(self, hosts):#проверки + одинаковые порты
         leader = hosts[0]
         for host in hosts[1:len(hosts)]:
-            print(leader, " ", self.aliveHosts[host], " ", host)
-            if (not self.aliveHosts[leader]) or (self.aliveHosts[host] and host[1] < leader[1]):
+            if (not self.__aliveHosts[leader]) or (self.__aliveHosts[host] and host[1] < leader[1]):
                 leader = host
         print(leader)
         return leader
