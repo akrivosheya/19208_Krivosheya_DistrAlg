@@ -12,7 +12,6 @@ class DistrHashMap:
         return self.__hashMap.get(key)
 
     def set(self, key, value):
-        print('map set')
         self.__node.setRPC(key, value)
 
     def __localSet(self, key, value):
