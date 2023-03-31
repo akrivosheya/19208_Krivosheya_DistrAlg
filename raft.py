@@ -9,7 +9,7 @@ LEADER = 0
 FOLLOWER = 1
 CANDIDATE = 2
 
-ALIVE_RESPOND = 0
+POP_COMMAND = 0
 SET_COMMAND = 1
 APPEND_ENTRIES_COMMAND = 2
 RESPOND = 3
@@ -29,8 +29,9 @@ NONE_NUMBER = 0
 PORT_SEPARATOR = ':'
 
 class RaftNode:
-    def __init__(self, ownHost, otherHosts, onRemoteSet, onDestroy):
+    def __init__(self, ownHost, otherHosts, onRemoteSet, onRemotePop, onDestroy):
         self.__onRemoteSet = onRemoteSet
+        self.__onRemotePop = onRemotePop
         self.__onDestroy = onDestroy
         self.__isDestroying = False
 
@@ -54,12 +55,19 @@ class RaftNode:
             self.__matchIndex[nodeData] = 0
 
         self.__commands = list()
-        self.__commands.append(self.__aliveRespond)
+        self.__commands.append(self.__popCommand)
         self.__commands.append(self.__setCommand)
         self.__commands.append(self.__appendEntriesCommand)
         self.__commands.append(self.__respond)
         self.__commands.append(self.__voteCommand)
         self.__commands.append(self.__voteRespond)
+        self.__behavioursOnTick = list()
+        self.__behavioursOnTick.append(self.__leaderDoOnTick)
+        self.__behavioursOnTick.append(self.__followerDoOnTick)
+        self.__behavioursOnTick.append(self.__candidateDoOnTick)
+        self.__applies = list()
+        self.__applies.append(self.__popApply)
+        self.__applies.append(self.__setApply)
 
         self.__failureDetector = FailureDetector(self.__allNodes)
         self.__failureDetector.setIsAlive(self.__ownNode, True)
@@ -81,18 +89,21 @@ class RaftNode:
         self.__perfectLink.destroy()
         self.__onTickThread.join()
 
-    def setRPC(self, key, value):#нужен respond
+    def setRPC(self, key, value):
         if(self.__role == FOLLOWER):
             pass
             self.__perfectLink.sendMessageTo(SET_COMMAND, (key, value), self.__leader, self.__currentSession, NONE_NUMBER, NONE_NUMBER, NONE_NUMBER)
         if(self.__role == LEADER):
-            #self.__onRemoteSet(key, value)
             self.__logs.append((SET_COMMAND, self.__currentSession, (key, value)))
-            """
-            self.__perfectLink.sendBroadcastMessage(SET_COMMAND, (key, value), self.__currentSession, 
-                                                    len(self.__logs), (self.__logs[len(self.__logs) - 1])[SESSION_INDEX], 
-                                                    self.__commitIndex)
-            """
+            print('leader log ', self.__logs)
+
+    def popRPC(self, key):
+        if(self.__role == FOLLOWER):
+            pass
+            self.__perfectLink.sendMessageTo(POP_COMMAND, key, self.__leader, self.__currentSession, NONE_NUMBER, NONE_NUMBER, NONE_NUMBER)
+        if(self.__role == LEADER):
+            self.__logs.append((POP_COMMAND, self.__currentSession, key))
+            print('leader log ', self.__logs)
 
     def __doOnTick(self):
         iterations = 0
@@ -105,14 +116,11 @@ class RaftNode:
             messages = self.__perfectLink.getMessages()
             self.__checkMessages(messages)
             if(self.__commitIndex > self.__lastApplied):
-                for i in range(self.__lastApplied, len(self.__logs)):
+                for i in range(self.__lastApplied, self.__commitIndex):
                     self.__applyLog(self.__logs[i])
                 self.__lastApplied = self.__commitIndex
-                print('applied')
-            if(self.__role == LEADER):#функции в списке
-                self.__leaderDoOnTick()
-            elif(self.__role == CANDIDATE):
-                self.__candidateDoOnTick()
+                print('applied to ', self.__lastApplied)
+            self.__behavioursOnTick[self.__role]()
             iterations += 1
             self.__electionTimeout -= 1
             if(iterations == FAILURE_DETECTION_TIMES):
@@ -129,18 +137,23 @@ class RaftNode:
                     self.__voteResults[self.__ownNode] = True
 
     def __applyLog(self, log):
-        if(log[TYPE_INDEX] == SET_COMMAND):
-            key, value = log[DATA_INDEX]
-            self.__onRemoteSet(key, value)
+        self.__applies[log[TYPE_INDEX]](log)
+
+    def __popApply(self, log):
+        key = log[DATA_INDEX]
+        self.__onRemotePop(key)
+
+    def __setApply(self, log):
+        key, value = log[DATA_INDEX]
+        self.__onRemoteSet(key, value)
             
     def __leaderDoOnTick(self):
         indexes = [self.__matchIndex[i] for i in self.__allNodes if (i != self.__ownNode and self.__failureDetector.nodeIsAlive(i))]
         if(len(indexes) == 0):
-            minIndex = 0
+            self.__minMatchIndex = 0
         else:
-            minIndex = min(indexes)
-        self.__minMatchIndex = minIndex
-        if(self.__minMatchIndex > 0 and (self.__logs[self.__minMatchIndex - 1])[SESSION_INDEX] == self.__currentSession):
+            self.__minMatchIndex = min(indexes)
+        if(self.__minMatchIndex > self.__commitIndex and (self.__logs[self.__minMatchIndex - 1])[SESSION_INDEX] == self.__currentSession):
             self.__commitIndex = self.__minMatchIndex
         for node in self.__allNodes:
             if(node == self.__ownNode):
@@ -155,22 +168,11 @@ class RaftNode:
                 entries = list()
             else:
                 entries = self.__logs[nextIndex - 1]
-            """
-            if(lenLogs == nextIndex - 1 or nextIndex < 1):
-                entries = list()
-                prevLogSession = self.__currentSession
-            else:
-                try:
-                    entries = self.__logs[nextIndex - 1]
-                except:
-                    print('bad ', lenLogs, ' ', nextIndex - 1)
-                if(nextIndex - 2 >= 0):
-                    prevLogSession = (self.__logs[nextIndex - 2])[SESSION_INDEX]
-                else:
-                    prevLogSession = self.__currentSession
-            """
             self.__perfectLink.sendMessageTo(APPEND_ENTRIES_COMMAND, entries, node, self.__currentSession,
                 nextIndex - 1, prevLogSession, self.__commitIndex)
+            
+    def __followerDoOnTick(self):
+        pass
             
     def __candidateDoOnTick(self):
         for node in self.__allNodes:
@@ -186,31 +188,29 @@ class RaftNode:
 
     def __checkMessages(self, messages):
         for message in messages:
-            print('mes ', message)
+            print('message ', message)
             (messageType, session, nodeData, prevLogIndex, prevLogSession, leaderCommit, data) = message
             if(session > self.__currentSession and (messageType == APPEND_ENTRIES_COMMAND or messageType == VOTE_COMMAND)):
                 self.__currentSession = session
                 self.__votedFor = None
                 self.__role = FOLLOWER
                 self.__leader = nodeData
-            """
-            if(session < self.__currentSession and self.__role != CANDIDATE):
-                continue
-            """
             self.__failureDetector.setIsAlive(nodeData, True)
-            self.__commands[messageType](messageType, session, nodeData, data, prevLogIndex, prevLogSession, leaderCommit)
+            self.__commands[messageType](session, nodeData, data, prevLogIndex, prevLogSession, leaderCommit)
 
-    def __aliveRespond(self, messageType, session, nodeData, data, prevLogIndex, prevLogSession, leaderCommit):
-        #print('alive respond')
-        self.__failureDetector.setIsAlive(data, True)
+    def __popCommand(self, session, nodeData, data, prevLogIndex, prevLogSession, leaderCommit):
+        print("pop request ", data)
+        if(self.__role == LEADER):
+            self.__logs.append((POP_COMMAND, self.__currentSession, data))
+            print('leader logs ', self.__logs)
 
-    def __setCommand(self, messageType, session, nodeData, data, prevLogIndex, prevLogSession, leaderCommit):#нужно будет переделать и присваивать при команде коммит
+    def __setCommand(self, session, nodeData, data, prevLogIndex, prevLogSession, leaderCommit):
         print("set request ", data)
         if(self.__role == LEADER):
             self.__logs.append((SET_COMMAND, self.__currentSession, data))
             print('leader logs ', self.__logs)
 
-    def __appendEntriesCommand(self, messageType, session, nodeData, data, prevLogIndex, prevLogSession, leaderCommit):
+    def __appendEntriesCommand(self, session, nodeData, data, prevLogIndex, prevLogSession, leaderCommit):
         if(self.__role == FOLLOWER):
             self.__electionTimeout = random.randint(MIN_ELECTION_TIMEOUT, MAX_ELECTION_TIMEOUT)
             success = True
@@ -232,27 +232,9 @@ class RaftNode:
                     print('logs ', self.__logs)
                 if(leaderCommit > self.__commitIndex):
                     self.__commitIndex = min(leaderCommit, len(self.__logs))
-            """
-            if(len(data) == 0):
-                self.__perfectLink.sendMessageTo(ALIVE_RESPOND, success, self.__leader, self.__currentSession, NONE_NUMBER, NONE_NUMBER, NONE_NUMBER)
-                if(leaderCommit > self.__commitIndex):
-                    self.__commitIndex = min(leaderCommit, len(self.__logs))
-                return
-            if(session < self.__currentSession or len(self.__logs) <= prevLogIndex - 1):
-                success = False
-            elif(prevLogIndex > 0 and self.__logs[prevLogIndex - 1][SESSION_INDEX] != self.__currentSession):
-                self.__logs = [self.__logs[i] for i in range(0, prevLogIndex - 1)]
-            elif(prevLogIndex == 0):
-                self.__logs.clear()
-            if(success):
-                self.__logs.append(data)
-                if(leaderCommit > self.__commitIndex):
-                    self.__commitIndex = min(leaderCommit, len(self.__logs))
-            """
             self.__perfectLink.sendMessageTo(RESPOND, success, self.__leader, self.__currentSession, prevLogIndex, NONE_NUMBER, NONE_NUMBER)
 
-    def __respond(self, messageType, session, nodeData, success, prevLogIndex, prevLogSession, leaderCommit):
-        print('success ', success)
+    def __respond(self, session, nodeData, success, prevLogIndex, prevLogSession, leaderCommit):
         if(self.__role == LEADER and self.__nextIndex[nodeData] == prevLogIndex + 1):
             if success:
                 self.__nextIndex[nodeData] += 1
@@ -267,29 +249,26 @@ class RaftNode:
                     self.__nextIndex[nodeData] = 1
                     self.__matchIndex[nodeData] = 0
 
-    def __voteCommand(self, messageType, session, nodeData, success, prevLogIndex, prevLogSession, leaderCommit):
+    def __voteCommand(self, session, nodeData, success, prevLogIndex, prevLogSession, leaderCommit):
         if(self.__role == FOLLOWER):
             self.__electionTimeout = random.randint(MIN_ELECTION_TIMEOUT, MAX_ELECTION_TIMEOUT)
             success = False
             if(session >= self.__currentSession and (self.__votedFor == None or self.__votedFor == nodeData)):
                 if(prevLogIndex >= len(self.__logs) and prevLogSession >= self.__logs[len(self.__logs) - 1][SESSION_INDEX]):
-                    self.__voteFor = nodeData
+                    self.__votedFor = nodeData
                     success = True
-                    self.__perfectLink.sendMessageTo(VOTE_RESPOND, True, nodeData, self.__currentSession, NONE_NUMBER, NONE_NUMBER, NONE_NUMBER)
-                    return
-        self.__perfectLink.sendMessageTo(VOTE_RESPOND, success, nodeData, self.__currentSession, NONE_NUMBER, NONE_NUMBER, NONE_NUMBER)
-        return
+            self.__perfectLink.sendMessageTo(VOTE_RESPOND, success, nodeData, self.__currentSession, NONE_NUMBER, NONE_NUMBER, NONE_NUMBER)
     
-    def __voteRespond(self, messageType, session, nodeData, success, prevLogIndex, prevLogSession, leaderCommit):
+    def __voteRespond(self, session, nodeData, success, prevLogIndex, prevLogSession, leaderCommit):
         if(self.__role == CANDIDATE):
             if success:
                 self.__voteResults[nodeData] = True
                 if(self.__wonVote()):
                     self.__role = LEADER
+                    self.__votedFor = None
                     self.__leader = self.__ownNode
             else:
                 self.__voteResults[nodeData] = False
-
     
     def __wonVote(self):
         aliveNodes = 0
@@ -297,16 +276,14 @@ class RaftNode:
         for node, voted in self.__voteResults.items():
             if(self.__failureDetector.nodeIsAlive(node)):
                 aliveNodes += 1
-            if(self.__voteResults[node]):
+            if(voted):
                 votedNodes += 1
         print(votedNodes > (aliveNodes / 2), " ", votedNodes, aliveNodes)
         return votedNodes > (aliveNodes / 2)
 
     def __getLeader(self):#проверки + одинаковые порты
         leader = self.__allNodes[0]
-        print(leader)
         for host in self.__allNodes[1:len(self.__allNodes)]:
-            print(host, ' ', leader)
             if host[1] < leader[1]:
                 leader = host
         print('leader ', leader)

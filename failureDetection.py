@@ -1,4 +1,3 @@
-
 class FailureDetector:
     def __init__(self, allNodes):
         self.__aliveBeforeCheckingNodes = dict()

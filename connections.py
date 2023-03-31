@@ -4,30 +4,21 @@ import pickle
 import threading
 import time
 
-PORT_SEPARATOR = ':'
-
 MESSAGE_TYPE_SIZE = 1
 MESSAGE_LENGTH_SIZE = 1
 MESSAGE_SESSION_SIZE = 1
 INDEX_SIZE = 1
 BUFFER_SIZE_LIMIT = 100
 
-TIMEOUT = 5
 CONNECT_TIME = 1
 SELECT_TIME = 1
 ACCEPTING_TIMEOUT = 5
-CHECKING_WAIT_TIME = 0.5
 MAX_ATTEMPTS = 5
-
-ALIVE = 0
-SET = 1
-GET_LOG = 2
-SEND_LOG = 3
 
 class PerfectLink:
     def __init__(self, ownHost, otherHosts, onDestroy):
         self.__ownNode = ownHost
-        self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)#exceptions!!!
+        self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.__socket.bind(self.__ownNode)
         self.__socket.settimeout(ACCEPTING_TIMEOUT)
         self.__socket.listen(1)
@@ -54,15 +45,10 @@ class PerfectLink:
         return tmpBuffer
 
     def sendBroadcastMessage(self, messageType, value, session, prevLogIndex, prevLogSession, leaderCommit):
-        brokenSockets = list()
         for node in self.__writeConnections.keys():
             if(node == self.__ownNode):
                 continue
-            if(self.sendMessageTo(messageType, value, node, session, prevLogIndex, prevLogSession, leaderCommit)):
-                pass
-            else:
-                brokenSockets.append(node)
-        return brokenSockets
+            self.sendMessageTo(messageType, value, node, session, prevLogIndex, prevLogSession, leaderCommit)
 
     def sendMessageTo(self, messageType, value, node, session, prevLogIndex, prevLogSession, leaderCommit):
         serializedSession = session.to_bytes(MESSAGE_SESSION_SIZE, byteorder='little', signed=False)
@@ -92,8 +78,6 @@ class PerfectLink:
             except:
                 pass
             self.__writeConnections[node] = None
-            return False
-        return True
 
     def destroy(self):
         self.__isDestroying = True
@@ -106,6 +90,7 @@ class PerfectLink:
                 self.__closeConnections(self.__readConnections)
                 self.__socket.close()
                 return
+            time.sleep(SELECT_TIME)
             checkingSockets = list()
             if(len(self.__buffer) >= BUFFER_SIZE_LIMIT):
                 continue
