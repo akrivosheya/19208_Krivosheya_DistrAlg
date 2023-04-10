@@ -153,10 +153,7 @@ class RaftNode:
             
     def __leaderDoOnTick(self):
         indexes = [self.__matchIndex[i] for i in self.__allNodes if (i != self.__ownNode and self.__failureDetector.nodeIsAlive(i))]
-        if(len(indexes) == 0):
-            self.__minMatchIndex = 0
-        else:
-            self.__minMatchIndex = min(indexes)
+        self.__minMatchIndex = self.__getQuorumIndex(indexes)
         if(self.__minMatchIndex > self.__commitIndex and (self.__logs[self.__minMatchIndex - 1])[TERM_INDEX] == self.__currentTerm):
             self.__commitIndex = self.__minMatchIndex
         for node in self.__allNodes:
@@ -291,6 +288,13 @@ class RaftNode:
                 leader = host
         print('leader ', leader)
         return leader
+    
+    def __getQuorumIndex(self, indexes):
+        if(len(indexes) == 0):
+           return 0
+        indexes.sort()
+        indexes = [indexes[i] for i in range(int(len(indexes) / 2), len(indexes))]
+        return min(indexes)
     
     def __getParsedHost(self, host):
         separatedHost = host.split(PORT_SEPARATOR)
