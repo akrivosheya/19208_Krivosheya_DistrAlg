@@ -10,6 +10,8 @@ class FailureDetector:
         self.__aliveBeforeCheckingNodes[node] = isAlive
 
     def nodeIsAlive(self, node):#проверки
+        if(node == None or not self.__aliveAfterCheckingNodes.__contains__(node)):
+           return False
         return self.__aliveAfterCheckingNodes[node]
 
     def checkNodes(self):
