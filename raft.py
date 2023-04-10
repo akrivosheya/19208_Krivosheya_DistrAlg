@@ -171,7 +171,7 @@ class RaftNode:
             if(lenLogs == nextIndex - 1):
                 entries = list()
             else:
-                entries = self.__logs[nextIndex - 1]
+                entries = [self.__logs[i] for i in range(nextIndex - 1, len(self.__logs))]
             self.__perfectLink.sendMessageTo(APPEND_ENTRIES_COMMAND, entries, node, self.__currentTerm,
                 nextIndex - 1, prevLogTerm, self.__commitIndex)
             
@@ -232,20 +232,18 @@ class RaftNode:
                         removeUntilIndex = prevLogIndex
                     self.__logs = [self.__logs[i] for i in range(0, removeUntilIndex)]
                 if(len(data) != 0):
-                    self.__logs.append(data)
+                    for log in data:
+                        self.__logs.append(log)
                     print('logs ', self.__logs)
                 if(leaderCommit > self.__commitIndex):
                     self.__commitIndex = min(leaderCommit, len(self.__logs))
-            self.__perfectLink.sendMessageTo(RESPOND, success, self.__leader, self.__currentTerm, prevLogIndex, NONE_NUMBER, NONE_NUMBER)
+            self.__perfectLink.sendMessageTo(RESPOND, success, self.__leader, self.__currentTerm, len(self.__logs), NONE_NUMBER, NONE_NUMBER)
 
     def __respond(self, term, nodeData, success, prevLogIndex, prevLogTerm, leaderCommit):
-        if(self.__role == LEADER and self.__nextIndex[nodeData] == prevLogIndex + 1):
+        if(self.__role == LEADER):
             if success:
-                self.__nextIndex[nodeData] += 1
-                self.__matchIndex[nodeData] += 1
-                if(self.__nextIndex[nodeData] > len(self.__logs) + 1):
-                    self.__nextIndex[nodeData] = len(self.__logs) + 1
-                    self.__matchIndex[nodeData] = len(self.__logs)
+                self.__nextIndex[nodeData] = prevLogIndex + 1
+                self.__matchIndex[nodeData] = prevLogIndex
             else:
                 self.__nextIndex[nodeData] -= 1
                 self.__matchIndex[nodeData] -= 1
