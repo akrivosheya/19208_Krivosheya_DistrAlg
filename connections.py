@@ -6,7 +6,7 @@ import time
 
 MESSAGE_TYPE_SIZE = 1
 MESSAGE_LENGTH_SIZE = 1
-MESSAGE_SESSION_SIZE = 1
+MESSAGE_TERM_SIZE = 1
 INDEX_SIZE = 1
 BUFFER_SIZE_LIMIT = 100
 
@@ -44,24 +44,24 @@ class PerfectLink:
         self.__bufferLock.release()
         return tmpBuffer
 
-    def sendBroadcastMessage(self, messageType, value, session, prevLogIndex, prevLogSession, leaderCommit):
+    def sendBroadcastMessage(self, messageType, value, term, prevLogIndex, prevLogTerm, leaderCommit):
         for node in self.__writeConnections.keys():
             if(node == self.__ownNode):
                 continue
-            self.sendMessageTo(messageType, value, node, session, prevLogIndex, prevLogSession, leaderCommit)
+            self.sendMessageTo(messageType, value, node, term, prevLogIndex, prevLogTerm, leaderCommit)
 
-    def sendMessageTo(self, messageType, value, node, session, prevLogIndex, prevLogSession, leaderCommit):
-        serializedSession = session.to_bytes(MESSAGE_SESSION_SIZE, byteorder='little', signed=False)
+    def sendMessageTo(self, messageType, value, node, term, prevLogIndex, prevLogTerm, leaderCommit):
+        serializedTerm = term.to_bytes(MESSAGE_TERM_SIZE, byteorder='little', signed=False)
         serializedNode = pickle.dumps(self.__ownNode)
         nodeLength = serializedNode.__len__().to_bytes(MESSAGE_LENGTH_SIZE, byteorder='little', signed=False)
         serializedValue = pickle.dumps(value)
         length = serializedValue.__len__().to_bytes(MESSAGE_LENGTH_SIZE, byteorder='little', signed=False)
         serializedMessageType = messageType.to_bytes(MESSAGE_TYPE_SIZE, byteorder='little', signed=False)
         serializedPrevLog = prevLogIndex.to_bytes(INDEX_SIZE, byteorder='little', signed=False)
-        serializedPrevLogSession = prevLogSession.to_bytes(INDEX_SIZE, byteorder='little', signed=False)
+        serializedPrevLogTerm = prevLogTerm.to_bytes(INDEX_SIZE, byteorder='little', signed=False)
         serializedLeaderCommit = leaderCommit.to_bytes(INDEX_SIZE, byteorder='little', signed=False)
-        message = (b'').join([serializedMessageType, serializedSession, nodeLength, serializedNode, 
-                              serializedPrevLog, serializedPrevLogSession, serializedLeaderCommit, length, serializedValue])
+        message = (b'').join([serializedMessageType, serializedTerm, nodeLength, serializedNode, 
+                              serializedPrevLog, serializedPrevLogTerm, serializedLeaderCommit, length, serializedValue])
         if(self.__writeConnections[node] == None):
             connection = self.__tryToConnect(node)
             if(connection == None):
@@ -126,16 +126,16 @@ class PerfectLink:
             serializedMessageType = socket.recv(MESSAGE_TYPE_SIZE)
             if serializedMessageType.__len__() > 0:
                 messageType = int.from_bytes(serializedMessageType, byteorder='little', signed=False)
-                serializedSession = socket.recv(MESSAGE_SESSION_SIZE)
-                session = int.from_bytes(serializedSession, byteorder='little', signed=False)
+                serializedTerm = socket.recv(MESSAGE_TERM_SIZE)
+                term = int.from_bytes(serializedTerm, byteorder='little', signed=False)
                 serializedNodeLength = socket.recv(MESSAGE_LENGTH_SIZE)
                 nodeLength = int.from_bytes(serializedNodeLength, byteorder='little', signed=False)
                 serializedNodeData = socket.recv(nodeLength)
                 nodeData = pickle.loads(serializedNodeData)
                 serializedPrevLogIndex = socket.recv(INDEX_SIZE)
                 prevLogIndex = int.from_bytes(serializedPrevLogIndex, byteorder='little', signed=False)
-                serializedPrevLogSession = socket.recv(INDEX_SIZE)
-                prevLogSession = int.from_bytes(serializedPrevLogSession, byteorder='little', signed=False)
+                serializedPrevLogTerm = socket.recv(INDEX_SIZE)
+                prevLogTerm = int.from_bytes(serializedPrevLogTerm, byteorder='little', signed=False)
                 serializedLeaderCommit = socket.recv(INDEX_SIZE)
                 leaderCommit = int.from_bytes(serializedLeaderCommit, byteorder='little', signed=False)
                 serializedLength = socket.recv(MESSAGE_LENGTH_SIZE)
@@ -143,7 +143,7 @@ class PerfectLink:
                 serializedData = socket.recv(length)
                 data = pickle.loads(serializedData)
                 self.__bufferLock.acquire()
-                self.__buffer.append((messageType, session, nodeData, prevLogIndex, prevLogSession, leaderCommit, data))
+                self.__buffer.append((messageType, term, nodeData, prevLogIndex, prevLogTerm, leaderCommit, data))
                 self.__bufferLock.release()
         except Exception as ex:
             print('Lost connection to host: ', ex)
