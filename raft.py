@@ -3,12 +3,10 @@ import time
 import random
 """
 аргументы объекты
-respond со следующим индексом + список логов отправлять + хранить у себя свои индексы и термы
 
 компановка журнала
 запросы клиентов
 """
-
 from failureDetection import FailureDetector
 from connections import PerfectLink
 
