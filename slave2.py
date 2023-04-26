@@ -1,4 +1,4 @@
-from distrHashMap import DistrHashMap
+from DistrHashMap import DistrHashMap
 
 HOST = '192.168.56.1:4223'
 OTHER_HOSTS = ['192.168.56.1:4221', '192.168.56.1:4222']

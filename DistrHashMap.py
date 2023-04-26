@@ -9,17 +9,17 @@ class DistrHashMap:
         self.__node.destroy()
 
     def get(self, key):
-        return self.__hashMap.get(key)
+        return self.__hashMap.get(hash(key))
 
     def set(self, key, value):
-        self.__node.setRPC(key, value)
+        self.__node.setRPC(hash(key), value)
 
     def pop(self, key):
-        self.__node.popRPC(key)
+        self.__node.popRPC(hash(key))
 
     def __localSet(self, key, value):
-        self.__hashMap[key] = value
+        self.__hashMap[hash(key)] = value
 
     def __localPop(self, key):
-        self.__hashMap.pop(key)
+        self.__hashMap.pop(hash(key))
         
