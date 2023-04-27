@@ -88,7 +88,7 @@ class AtomicOperations(DistrHashMap):
                 self.__setOwnData(False, self.get(LOCKS_EXKEY + self.__ownHost))
                 #print('set own data False')
                 while self.get(OWNER_KEY) != None and self.get(OWNER_KEY) in otherRequests:
-                    time.sleep(SLEEP_TIME)
+                    pass#time.sleep(SLEEP_TIME)
                 #print('try set own data True')
                 self.__setOwnData(True, self.get(LOCKS_EXKEY + self.__ownHost))
                 #print('set own data True')

@@ -11,7 +11,7 @@ cas = AtomicOperations(HOST, OTHER_HOSTS)
 val = Value(0)
 print(val.value)
 input('wait')
-for i in range(0, 5):
+for i in range(0, 10):
     cas.compareAndSwap(val, i, i + 1)
     print(val.value)
 cas.destroy()
