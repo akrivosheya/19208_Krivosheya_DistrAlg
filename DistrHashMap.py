@@ -138,10 +138,6 @@ class AtomicOperations(DistrHashMap):
         self.set(OWNER_KEY, host)
         while not (self.get(OWNER_KEY) == host):
             time.sleep(SLEEP_TIME)
-    
-    def __checkValues(self, key, value):
-        while not (self.get(key) == value):
-            time.sleep(SLEEP_TIME)
 
 
         
