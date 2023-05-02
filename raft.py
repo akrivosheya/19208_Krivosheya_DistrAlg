@@ -36,10 +36,9 @@ NONE_NUMBER = 0
 PORT_SEPARATOR = ':'
 
 class RaftNode:
-    def __init__(self, ownHost, otherHosts, onRemoteSet, onRemotePop, onDestroy):
+    def __init__(self, ownHost, otherHosts, onRemoteSet, onRemotePop):
         self.__onRemoteSet = onRemoteSet
         self.__onRemotePop = onRemotePop
-        self.__onDestroy = onDestroy
         self.__isDestroying = False
 
         self.__currentTerm = 0
@@ -79,13 +78,13 @@ class RaftNode:
         self.__failureDetector = FailureDetector(self.__allNodes)
         self.__failureDetector.setIsAlive(self.__ownNode, True)
 
-        self.__perfectLink = PerfectLink(self.__ownNode, self.__allNodes, onDestroy)
+        self.__perfectLink = PerfectLink(self.__ownNode, self.__allNodes)
 
         self.__allNodes.append(self.__ownNode)
         self.__role = FOLLOWER
         self.__leader = None
 
-        self.__onTickThread = threading.Thread(target=self.__doOnTick)
+        self.__onTickThread = threading.Thread(target=self.__doOnTick, daemon=True)
         self.__onTickThread.start()
 
     def destroy(self):

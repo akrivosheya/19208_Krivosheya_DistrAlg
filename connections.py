@@ -16,7 +16,7 @@ ACCEPTING_TIMEOUT = 5
 MAX_ATTEMPTS = 5
 
 class PerfectLink:
-    def __init__(self, ownHost, otherHosts, onDestroy):
+    def __init__(self, ownHost, otherHosts):
         self.__ownNode = ownHost
         self.__socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.__socket.bind(self.__ownNode)
@@ -25,16 +25,15 @@ class PerfectLink:
         self.__buffer = list()
 
         self.__isDestroying = False
-        self.__onDestroy = onDestroy
         self.__readConnections = dict()
         self.__writeConnections = dict()
         for otherHost in otherHosts:
             self.__writeConnections[otherHost] = None
 
         self.__bufferLock = threading.Lock()
-        self.__checkingSocketsThread = threading.Thread(target=self.__checkSockets)
+        self.__checkingSocketsThread = threading.Thread(target=self.__checkSockets, daemon=True)
         self.__checkingSocketsThread.start()
-        self.__acceptingThread = threading.Thread(target=self.__accept)
+        self.__acceptingThread = threading.Thread(target=self.__accept, daemon=True)
         self.__acceptingThread.start()
 
     def getMessages(self):
@@ -78,10 +77,6 @@ class PerfectLink:
             except:
                 pass
             self.__writeConnections[node] = None
-
-    def destroy(self):
-        self.__isDestroying = True
-        self.__checkingSocketsThread.join()
 
     def __checkSockets(self):
         while True:
@@ -146,11 +141,13 @@ class PerfectLink:
                 self.__buffer.append((messageType, term, nodeData, prevLogIndex, prevLogTerm, leaderCommit, data))
                 self.__bufferLock.release()
         except Exception as ex:
-            print('Lost connection to host: ', ex)
-            try:
-                print('host: ', socket.getpeername())
+            pass
+            #print('Lost connection to host: ', ex)
+            '''try:
+                #print('host: ', socket.getpeername())
             except:
-                print("can't get info about host")
+                pass
+                #print("can't get info about host")'''
         
     def __tryToConnect(self, node):
         connected = False
