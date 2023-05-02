@@ -4,11 +4,8 @@ DIV = 100
 
 class DistrHashMap:
     def __init__(self, ownHost, otherHosts):#проверки
-        self.__node = RaftNode(ownHost, otherHosts, self.localSet, self.localPop, self.destroy)
+        self.__node = RaftNode(ownHost, otherHosts, self.localSet, self.localPop)
         self.__hashMap = dict()
-
-    def destroy(self):
-        self.__node.destroy()
 
     def get(self, key):
         return self.__hashMap.get(self.__hash(key))
@@ -39,6 +36,7 @@ REQUEST_EXKEY = 'hasRequest'
 LOCKS_EXKEY = 'locksCount'
 
 SLEEP_TIME = 0.1
+VALUE_CHECKING_TIMES = 100
 
 class HostData:
     def __init__(self, hasRequest, locksCount):
@@ -78,24 +76,17 @@ class AtomicOperations(DistrHashMap):
         self.__setOwnData(True, self.get(LOCKS_EXKEY + self.__ownHost))
         #print('set own data')
         otherRequests = self.__getOtherRequests()
-        '''print('requests:')
-        for request in otherRequests:
-            print('    request', request)
-        print('owner', self.get(OWNER_KEY))'''
+        print("enter cycle 1")
         while len(otherRequests) > 0:
-            if self.get(OWNER_KEY) != None and self.get(OWNER_KEY) in otherRequests:
-                #print('try set own data False')
+            if self.get(OWNER_KEY) in otherRequests and self.get(OWNER_KEY) != self.__ownHost:
                 self.__setOwnData(False, self.get(LOCKS_EXKEY + self.__ownHost))
-                #print('set own data False')
-                while self.get(OWNER_KEY) != None and self.get(OWNER_KEY) in otherRequests:
-                    pass#time.sleep(SLEEP_TIME)
-                #print('try set own data True')
+                print("enter cycle 2 with owner", self.get(OWNER_KEY))
+                while self.get(OWNER_KEY) in otherRequests and self.get(OWNER_KEY) != self.__ownHost:
+                    pass
+                print("exit cycle 2 with owner", self.get(OWNER_KEY))
                 self.__setOwnData(True, self.get(LOCKS_EXKEY + self.__ownHost))
-                #print('set own data True')
             otherRequests = self.__getOtherRequests()
-            '''print('requests in cycle:')
-            for request in otherRequests:
-                print('    request', request)'''
+        print('exit cycle 1')
 
     def __release(self):
         nextHost = self.__getHostWithMinLocksCount()
@@ -131,13 +122,27 @@ class AtomicOperations(DistrHashMap):
     def __setValueGuaranteed(self, host, hasRequest, locksCount):
         self.set(REQUEST_EXKEY + host, hasRequest)
         self.set(LOCKS_EXKEY + host, locksCount)
+        #print("Setting value")
+        #time.sleep(3)
+        checkingTimes = VALUE_CHECKING_TIMES
         while not (self.get(REQUEST_EXKEY + host) == hasRequest and self.get(LOCKS_EXKEY + host) == locksCount):
             time.sleep(SLEEP_TIME)
+            checkingTimes -= 1
+            if checkingTimes == 0:
+                self.set(REQUEST_EXKEY + host, hasRequest)
+                self.set(LOCKS_EXKEY + host, locksCount)
+                checkingTimes = VALUE_CHECKING_TIMES
+        #print("Set value")
 
     def __setOwnerGuaranteed(self, host):
         self.set(OWNER_KEY, host)
+        checkingTimes = VALUE_CHECKING_TIMES
         while not (self.get(OWNER_KEY) == host):
             time.sleep(SLEEP_TIME)
+            checkingTimes -= 1
+            if checkingTimes == 0:
+                self.set(OWNER_KEY, host)
+                checkingTimes = VALUE_CHECKING_TIMES
 
 
         
